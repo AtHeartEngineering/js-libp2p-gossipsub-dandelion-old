@@ -241,3 +241,10 @@ export const ACCEPT_FROM_WHITELIST_DURATION_MS = 1000
  * The default MeshMessageDeliveriesWindow to be used in metrics.
  */
 export const DEFAULT_METRIC_MESH_MESSAGE_DELIVERIES_WINDOWS = 1000
+
+/* Dandelion Constants */
+export const GossipsubStemMin = 3
+export const GossipsubStemMax = 8
+export const numberOfStemPeers = 2
+export const StemReductionMin = 1
+export const StemReductionMax = 2

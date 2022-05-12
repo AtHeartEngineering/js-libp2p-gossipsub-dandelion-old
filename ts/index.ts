@@ -73,7 +73,7 @@ import {
   SubscriptionChangeData
 } from '@libp2p/interfaces/pubsub'
 import type { IncomingStreamData } from '@libp2p/interfaces/registrar'
-
+import { generateStemLength, reviseStemLength, selectRandomPeers } from './dandelion'
 // From 'bl' library
 interface BufferList {
   slice: () => Buffer
@@ -85,6 +85,7 @@ type ReceivedMessageResult =
   | { code: MessageStatus.duplicate; msgId: MsgIdStr }
   | ({ code: MessageStatus.invalid; msgId?: MsgIdStr } & RejectReasonObj)
   | { code: MessageStatus.valid; msgIdStr: MsgIdStr; msg: Message }
+  | { code: MessageStatus.validStem; msgIdStr: MsgIdStr; msg: Message }
 
 export const multicodec: string = constants.GossipsubIDv11
 
@@ -172,6 +173,12 @@ type GossipStatus =
 interface GossipOptions extends GossipsubOpts {
   scoreParams: PeerScoreParams
   scoreThresholds: PeerScoreThresholds
+  stemMin?: number
+  stemMax?: number
+  numberOfStemPeers?: number
+  dandelion?: boolean
+  stemReductionMin?: number
+  stemReductionMax?: number
 }
 
 interface AcceptFromWhitelistEntry {
@@ -349,7 +356,13 @@ export class GossipSub extends EventEmitter<GossipsubEvents> implements Initiali
       directConnectTicks: constants.GossipsubDirectConnectTicks,
       ...options,
       scoreParams: createPeerScoreParams(options.scoreParams),
-      scoreThresholds: createPeerScoreThresholds(options.scoreThresholds)
+      scoreThresholds: createPeerScoreThresholds(options.scoreThresholds),
+      stemMin: constants.GossipsubStemMin,
+      stemMax: constants.GossipsubStemMax,
+      numberOfStemPeers: constants.numberOfStemPeers,
+      dandelion: false,
+      stemReductionMin: constants.StemReductionMin,
+      stemReductionMax: constants.StemReductionMax
     }
 
     this.globalSignaturePolicy = opts.globalSignaturePolicy ?? StrictSign
@@ -948,6 +961,19 @@ export class GossipSub extends EventEmitter<GossipsubEvents> implements Initiali
           // .forward_msg(&msg_id, raw_message, Some(propagation_source))
           this.forwardMessage(validationResult.msgIdStr, rpcMsg, from.toString())
         }
+
+      case MessageStatus.validStem:
+        const newStem = reviseStemLength(validationResult.msg.stem, this.opts.stemReductionMin, this.opts.stemReductionMax)
+        if (newStem > 0) {
+          rpcMsg.stem = newStem
+          rpcMsg.from = this.components.getPeerId()
+          // console.log("Passing as Stem message")
+          await this.forwardStemMessage(validationResult.msgIdStr, rpcMsg, from.toB58String())
+        } else {
+          delete rpcMsg.stem
+          // console.log("FLUFF!")
+          await this.handleReceivedMessage(from, rpcMsg)
+        }
     }
   }
 
@@ -1033,6 +1059,10 @@ export class GossipSub extends EventEmitter<GossipsubEvents> implements Initiali
       if (acceptance !== MessageAcceptance.Accept) {
         return { code: MessageStatus.invalid, reason: rejectReasonFromAcceptance(acceptance), msgId: msgIdStr }
       }
+    }
+
+    if (this.opts.dandelion === true && msg.stem !== undefined && msg.stem > 0) {
+      return { code: MessageStatus.validStem, msgIdStr, msg }
     }
 
     return { code: MessageStatus.valid, msgIdStr, msg }
@@ -1820,13 +1850,23 @@ export class GossipSub extends EventEmitter<GossipsubEvents> implements Initiali
     this.metrics?.onForwardMsg(rawMsg.topic, tosend.size)
   }
 
+  async publish(topic: TopicStr, data: Uint8Array): Promise<number> {
+    let result = null
+    if (this.opts.dandelion) {
+      result = this._publishStem(topic, data)
+    } else {
+      result = this._publish(topic, data)
+    }
+    return result
+  }
+
   /**
    * App layer publishes a message to peers, return number of peers this message is published to
    * Note: `async` due to crypto only if `StrictSign`, otherwise it's a sync fn.
    *
    * For messages not from us, this class uses `forwardMessage`.
    */
-  async publish(topic: TopicStr, data: Uint8Array): Promise<PublishResult> {
+  async _publish(topic: TopicStr, data: Uint8Array): Promise<PublishResult> {
     const transformedData = this.dataTransform ? this.dataTransform.outboundTransform(topic, data) : data
 
     if (this.publishConfig == null) {
@@ -2641,5 +2681,125 @@ export class GossipSub extends EventEmitter<GossipsubEvents> implements Initiali
     )
 
     metrics.registerScoreWeights(sw)
+  }
+
+  /**
+   * Forwards a stem message from a peer.
+   *
+   * For messages published by us (the app layer), this class uses `publish`
+   */
+  private forwardStemMessage(
+    msgIdStr: string,
+    rawMsg: RPC.Message,
+    propagationSource?: PeerIdStr,
+    excludePeers?: Set<PeerIdStr>
+  ): void {
+    // message is fully validated inform peer_score
+    if (propagationSource) {
+      this.score.deliverMessage(propagationSource, msgIdStr, rawMsg.topic)
+    }
+
+    const candidates = this.selectPeersToForward(rawMsg.topic, propagationSource, excludePeers)
+
+    const randomPeers = selectRandomPeers(candidates, this.opts.numberOfStemPeers)
+    // Note: Don't throw if randomPeers is empty, we can have a mesh with a single peer
+
+    // forward the message to a subset of peers
+    const rpc = createGossipRpc([rawMsg])
+    if (randomPeers !== null) {
+      randomPeers.forEach((id) => {
+        // self.send_message(*peer_id, event.clone())?;
+        this.sendRpc(id, rpc)
+      })
+      this.metrics?.onForwardMsg(rawMsg.topic, randomPeers.size)
+    }
+  }
+
+  /**
+   * App layer publishes a message to peers, return number of peers this message is published to
+   * Note: `async` due to crypto only if `StrictSign`, otherwise it's a sync fn.
+   *
+   * For messages not from us, this class uses `forwardMessage`.
+   */
+  async _publishStem(topic: TopicStr, data: Uint8Array): Promise<number> {
+    const transformedData = this.dataTransform ? this.dataTransform.outboundTransform(topic, data) : data
+
+    if (this.publishConfig == null) {
+      throw Error('PublishError.Uninitialized')
+    }
+
+    // Prepare raw message with user's publishConfig
+    const rawMsg = await buildRawMessage(this.publishConfig, topic, transformedData)
+
+    // calculate the message id from the un-transformed data
+    const msg: Message = {
+      from: rawMsg.from === null ? undefined : rawMsg.from,
+      data, // the uncompressed form
+      seqno: rawMsg.seqno === null ? undefined : rawMsg.seqno,
+      topic
+    }
+    const msgId = await this.msgIdFn(msg)
+    const msgIdStr = messageIdToString(msgId)
+
+    if (this.seenCache.has(msgIdStr)) {
+      // This message has already been seen. We don't re-publish messages that have already
+      // been published on the network.
+      throw Error('PublishError.Duplicate')
+    }
+
+    const { tosend } = this.selectPeersToPublish(rawMsg.topic)
+    // TODO! Make sure the sender isn't in the `tosend` list
+    // TODO Check if the instance has random peers selected already (making sure to check if they are still valid) and if it doesn't assign the random peers selected to the instance
+    const stemToSend = selectRandomPeers(tosend, this.opts.numberOfStemPeers)
+    const stemToSendCount: ToSendGroupCount = {
+      direct: stemToSend?.size ?? 0,
+      mesh: 0,
+      fanout: 0,
+      floodsub: 0
+    }
+
+    if (stemToSend !== null && stemToSend.size === 0 && !this.opts.allowPublishToZeroPeers) {
+      throw Error('PublishError.InsufficientPeers')
+    }
+
+    // If the message isn't a duplicate and we have sent it to some peers add it to the
+    // duplicate cache and memcache.
+    this.seenCache.put(msgIdStr)
+    this.mcache.put(msgIdStr, rawMsg)
+
+    // If the message is anonymous or has a random author add it to the published message ids cache.
+    this.publishedMessageIds.put(msgIdStr)
+
+    // Send to set of direct stem peers
+    const stem = generateStemLength(this.opts.stemMin, this.opts.stemMax)
+    rawMsg.stem = stem
+    const rpc = createGossipRpc([rawMsg])
+
+    if (stemToSend !== null) {
+      stemToSend.forEach((id) => {
+        // self.send_message(*peer_id, event.clone())?;
+        this.sendRpc(id, rpc)
+      })
+
+      this.metrics?.onPublishMsg(
+        topic,
+        stemToSendCount as ToSendGroupCount,
+        tosend.size,
+        rawMsg.data ? rawMsg.data.length : 0
+      )
+    }
+
+    // Dispatch the message to the user if we are subscribed to the topic
+    if (this.opts.emitSelf && this.subscriptions.has(topic)) {
+      super.emit('gossipsub:message', {
+        propagationSource: this.components.getPeerId(),
+        msgId: msgIdStr,
+        msg
+      })
+      // TODO: Add option to switch between emit per topic or all messages in one
+      super.emit(topic, msg)
+    }
+
+    return stemToSendCount.direct
   }
 }

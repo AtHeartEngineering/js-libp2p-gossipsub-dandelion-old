@@ -152,7 +152,8 @@ export enum ValidateError {
 export enum MessageStatus {
   duplicate = 'duplicate',
   invalid = 'invalid',
-  valid = 'valid'
+  valid = 'valid',
+  validStem = 'validStem'
 }
 
 /**

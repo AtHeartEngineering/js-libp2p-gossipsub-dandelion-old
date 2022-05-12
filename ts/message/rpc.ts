@@ -40,6 +40,7 @@ export namespace RPC {
     topic: string
     signature?: Uint8Array
     key?: Uint8Array
+    stem?: number
   }
 
   export namespace Message {
