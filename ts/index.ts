@@ -2748,8 +2748,8 @@ export class GossipSub extends EventEmitter<GossipsubEvents> implements Initiali
     }
 
     const { tosend } = this.selectPeersToPublish(rawMsg.topic)
-    // TODO! Make sure the sender isn't in the `tosend` list
-    // TODO Check if the instance has random peers selected already (making sure to check if they are still valid) and if it doesn't assign the random peers selected to the instance
+    // TODO! Make sure the sender isn't in the `tosend` list - AHE
+    // TODO Check if the instance has random peers selected already (making sure to check if they are still valid) and if it doesn't assign the random peers selected to the instance - AHE
     const stemToSend = selectRandomPeers(tosend, this.opts.numberOfStemPeers)
     const stemToSendCount: ToSendGroupCount = {
       direct: stemToSend?.size ?? 0,

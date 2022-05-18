@@ -243,8 +243,8 @@ export const ACCEPT_FROM_WHITELIST_DURATION_MS = 1000
 export const DEFAULT_METRIC_MESH_MESSAGE_DELIVERIES_WINDOWS = 1000
 
 /* Dandelion Constants */
-export const GossipsubStemMin = 3
-export const GossipsubStemMax = 8
-export const numberOfStemPeers = 2
-export const StemReductionMin = 1
-export const StemReductionMax = 2
+export {GossipsubStemMin} from './dandelion/constants'
+export {GossipsubStemMax} from './dandelion/constants'
+export {numberOfStemPeers} from './dandelion/constants'
+export {StemReductionMin} from './dandelion/constants'
+export {StemReductionMax} from './dandelion/constants'
