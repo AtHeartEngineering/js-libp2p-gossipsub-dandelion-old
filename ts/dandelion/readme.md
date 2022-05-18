@@ -6,7 +6,16 @@ This is an implementation of the Dandelion++ algorithm tailored for the Ethereum
 
 ## Todo
 
-### Stem Peer selection
+### Stem Peer Selection
 
 * [ ] Select and maintain the same random stem peers for a long period instead of choosing random stem peers for every message.
 * [ ] For received stem messages, remove the sender from the list of peers that are randomly selected from to forward the message to.
+
+### Peer Scoring
+
+* [ ] Peer scoring mechanisms bounding latency need to be implemented so dandelion doesn't cause large delays in message propagation throughout the network.
+* [ ] Other peer scoring mechanisms need to be evaluated and tailored for practical dandelion use
+
+## Concerns
+
+* Dandelion, as it is written now, overwrites the sender's peerID with their own every stem hop to help obfuscate the originating sender, but this will likely cause issues with how well peer scoring works to prevent spam / DOS / malicious attacks.
