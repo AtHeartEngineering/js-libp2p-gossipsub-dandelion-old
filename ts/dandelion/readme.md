@@ -6,10 +6,15 @@ This is an implementation of the Dandelion++ algorithm tailored for the Ethereum
 
 Dandelion is a method of passing messages around to a subset of peers before propagating the message in a standard floodsub/gossipsub fashion, to obfuscate the originating sender.
 
+## BN integration thoughts
+
+Dandelion++ should (currently is) be a completely backwards compatible modification of gossipsub. It also should be opt in, not the default or opt out, due to latency and potential for messages to not propogate in time, leading to attestation/block production penalties for being late. However, the users should be able to assess their own threats and opt into having more privacy while potentially taking the hit with timeliness (aka financially with rewards). Until there is more data on how well dandelion++ works in regards to delays in message propogation, I believe it should be opt in. 
+
 ## Todo
 
 ### Stem Peer Selection
 
+* [ ] Fix protobuf extension
 * [ ] Select and maintain the same random stem peers for a long period instead of choosing random stem peers for every message.
 * [ ] For received stem messages, remove the sender from the list of peers that are randomly selected from to forward the message to.
 
@@ -20,4 +25,4 @@ Dandelion is a method of passing messages around to a subset of peers before pro
 
 ## Concerns
 
-* Dandelion, as it is written now, overwrites the sender's peerID with their own every stem hop to help obfuscate the originating sender, but this will likely cause issues with how well peer scoring works to prevent spam / DOS / malicious attacks.
+* Dandelion, as it is written now, overwrites the sender's peerID with their own every stem hop to help obfuscate the originating sender, but this may cause issues with how well peer scoring works to prevent spam / DOS / malicious attacks.
